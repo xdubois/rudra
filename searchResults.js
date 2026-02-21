@@ -269,15 +269,16 @@ export class SearchResults {
             return;
         }
 
-        let calcResult = calculateExpression(this._currentQuery);
-        if (calcResult) {
-            this._resultsData = [calcResult];
+        let calcTimestamp = myTimestamp;
+        calculateExpression(this._currentQuery, (calcResult) => {
+            if (this._searchTimestamp !== calcTimestamp) return;
+            if (calcResult) {
+                this._resultsData = [calcResult];
+            } else {
+                this._resultsData = searchApps(this._currentQuery, maxRes);
+            }
             this._rebuildUI();
-            return;
-        }
-
-        this._resultsData = searchApps(this._currentQuery, maxRes);
-        this._rebuildUI();
+        });
     }
 
     _rebuildUI() {

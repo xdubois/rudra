@@ -138,60 +138,90 @@ const _CALC_ALLOWED_IDS = new Set([
     'pow', 'max', 'min', 'pi', 'e'
 ]);
 
-const _CALC_MATH_FUNCS = [
-    'sqrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2',
-    'log2', 'log10', 'log', 'exp', 'abs', 'ceil', 'floor', 'round',
-    'pow', 'max', 'min'
-];
+let _calcProc = null;
 
-const _CALC_DISPLAY_PRECISION = 10;
-
-export function calculateExpression(text) {
-    if (!text || text.trim() === '') return null;
+export function calculateExpression(text, callback) {
+    if (!text || text.trim() === '') {
+        callback(null);
+        return;
+    }
     let expr = text.trim();
 
     // Must contain at least one math operator or start with a known math function
     let hasBinaryOp = /[+\-*/%^]/.test(expr);
     let startsWithFn = /^(sqrt|sin|cos|tan|asin|acos|atan|log|exp|abs|ceil|floor|round|pow|max|min)\s*\(/i.test(expr);
-    if (!hasBinaryOp && !startsWithFn) return null;
-
-    // Allow only digits, spaces, operators, parentheses, dots, commas, and letters
-    if (!/^[\d\s+\-*/%^().,'a-zA-Z]+$/.test(expr)) return null;
-
-    // Extract all alphabetic identifiers and validate them
-    let ids = expr.match(/[a-zA-Z]+/g) || [];
-    for (let id of ids) {
-        if (!_CALC_ALLOWED_IDS.has(id.toLowerCase())) return null;
+    if (!hasBinaryOp && !startsWithFn) {
+        callback(null);
+        return;
     }
 
-    try {
-        let safeExpr = expr;
-        safeExpr = safeExpr.replace(/\^/g, '**');
-        safeExpr = safeExpr.replace(/\bpi\b/gi, 'Math.PI');
-        safeExpr = safeExpr.replace(/\be\b/gi, 'Math.E');
+    // Allow only digits, spaces, operators, parentheses, dots, commas, and letters
+    if (!/^[\d\s+\-*/%^().,'a-zA-Z]+$/.test(expr)) {
+        callback(null);
+        return;
+    }
 
-        for (let fn of _CALC_MATH_FUNCS) {
-            safeExpr = safeExpr.replace(new RegExp(`\\b${fn}\\b`, 'gi'), `Math.${fn}`);
+    // Validate all alphabetic identifiers against the whitelist
+    let ids = expr.match(/[a-zA-Z]+/g) || [];
+    for (let id of ids) {
+        if (!_CALC_ALLOWED_IDS.has(id.toLowerCase())) {
+            callback(null);
+            return;
         }
+    }
 
-        // eslint-disable-next-line no-new-func
-        let result = Function('"use strict"; return (' + safeExpr + ')')();
+    // Cancel any pending calculation
+    if (_calcProc) {
+        try { _calcProc.force_exit(); } catch (e) { /* ignore - process may have already exited */ }
+        _calcProc = null;
+    }
 
-        if (typeof result !== 'number' || !isFinite(result)) return null;
+    // Expression is validated by the whitelist above and sent via stdin (not a shell argument),
+    // so there is no shell injection risk.
+    try {
+        _calcProc = new Gio.Subprocess({
+            argv: ['gcalccmd'],
+            flags: Gio.SubprocessFlags.STDIN_PIPE |
+                   Gio.SubprocessFlags.STDOUT_PIPE |
+                   Gio.SubprocessFlags.STDERR_SILENCE
+        });
+        _calcProc.init(null);
 
-        let formatted = Number.isInteger(result)
-            ? result.toString()
-            : parseFloat(result.toPrecision(_CALC_DISPLAY_PRECISION)).toString();
+        let proc = _calcProc;
 
-        return {
-            type: 'calc',
-            name: `${expr} = ${formatted}`,
-            description: 'Calculator',
-            result: formatted,
-            expression: expr,
-            icon: new Gio.ThemedIcon({ name: 'accessories-calculator' })
-        };
+        proc.communicate_utf8_async(expr + '\n', null, (p, res) => {
+            if (_calcProc !== proc) return;
+            _calcProc = null;
+
+            try {
+                let [ok, stdout] = p.communicate_utf8_finish(res);
+                if (!ok || !stdout) { callback(null); return; }
+
+                let result = null;
+                for (let line of stdout.split('\n')) {
+                    line = line.trim();
+                    if (line.startsWith('= ')) {
+                        result = line.substring(2).trim();
+                        break;
+                    }
+                }
+                if (!result) { callback(null); return; }
+
+                callback({
+                    type: 'calc',
+                    name: `${expr} = ${result}`,
+                    description: 'Calculator',
+                    result: result,
+                    expression: expr,
+                    icon: new Gio.ThemedIcon({ name: 'accessories-calculator' })
+                });
+            } catch (e) {
+                console.error('calculateExpression error:', e);
+                callback(null);
+            }
+        });
     } catch (e) {
-        return null;
+        _calcProc = null;
+        callback(null);
     }
 }
