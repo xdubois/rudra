@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
-import { searchApps, searchFiles } from './search.js';
+import { searchApps, searchFiles, calculateExpression } from './search.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 function escapeMarkup(str) {
@@ -269,6 +269,13 @@ export class SearchResults {
             return;
         }
 
+        let calcResult = calculateExpression(this._currentQuery);
+        if (calcResult) {
+            this._resultsData = [calcResult];
+            this._rebuildUI();
+            return;
+        }
+
         this._resultsData = searchApps(this._currentQuery, maxRes);
         this._rebuildUI();
     }
@@ -339,7 +346,7 @@ export class SearchResults {
         nameLabel.clutter_text.use_markup = true;
         nameLabel.clutter_text.ellipsize = 3;
 
-        if (item.type === 'web' || item.type === 'command') {
+        if (item.type === 'web' || item.type === 'command' || item.type === 'calc') {
             nameLabel.clutter_text.set_text(item.name || '');
         } else {
             nameLabel.clutter_text.set_markup(
@@ -371,7 +378,10 @@ export class SearchResults {
 
     _activateItem(item) {
         try {
-            if (item.type === 'command') {
+            if (item.type === 'calc') {
+                St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, item.result);
+
+            } else if (item.type === 'command') {
                 try {
                     let [, argv] = GLib.shell_parse_argv(item.command);
                     let proc = new Gio.Subprocess({
